@@ -1,0 +1,246 @@
+{
+  "name": "Project Iceman",
+  "syncbackRules": {
+    "ignorePaths": [
+      "assets/sounds/ObstacleBreak.model.json"
+    ],
+    "ignoreTrees": [
+      "ReplicatedStorage/Assets/Sounds/ObstacleBreak"
+    ]
+  },
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Shared": {
+        "$path": "src/shared"
+      },
+      "Assets": {
+        "$className": "Folder",
+        "Loot": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "Sounds": {
+          "$className": "Folder",
+          "ObstacleBreak": {
+            "$path": "assets/sounds/ObstacleBreak.model.json"
+          },
+          "BackgroundMusic": {
+            "$path": "assets/sounds/BackgroundMusic"
+          },
+          "FireClick": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://120440118711735"
+            }
+          },
+          "LevelUp": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://3120909354"
+            }
+          },
+          "LootPickup": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://127056360624218",
+              "Volume": 0.5
+            }
+          },
+          "BuyUpgrade": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://124199202280292",
+              "Volume": 0.5
+            }
+          },
+          "SellSound": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://104788665578376",
+              "Volume": 0.5
+            }
+          },
+          "UiOpenClose": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://102702078778790",
+              "Volume": 0.5
+            }
+          },
+          "UiButtonHover": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://139800881181209",
+              "Volume": 0.5
+            }
+          },
+          "NegativeNotification": {
+            "$className": "Sound",
+            "$properties": {
+              "SoundId": "rbxassetid://92234422093364",
+              "Volume": 0.5
+            }
+          }
+        },
+        "Weapons": {
+          "$className": "Folder",
+          "$ignoreUnknownInstances": true
+        },
+        "VFX": {
+          "$className": "Folder",
+          "LevelUp": {
+            "$className": "Part",
+            "$properties": {
+              "Anchored": true,
+              "CanCollide": false,
+              "CanQuery": false,
+              "CanTouch": false,
+              "Size": [0.2, 0.2, 0.2],
+              "Transparency": 1
+            }
+          },
+          "Rebirth": {
+            "$className": "Part",
+            "$properties": {
+              "Anchored": true,
+              "CanCollide": false,
+              "CanQuery": false,
+              "CanTouch": false,
+              "Size": [0.2, 0.2, 0.2],
+              "Transparency": 1
+            }
+          },
+          "ObstacleHit": {
+            "$className": "Part",
+            "$properties": {
+              "Anchored": true,
+              "CanCollide": false,
+              "CanQuery": false,
+              "CanTouch": false,
+              "Size": [0.2, 0.2, 0.2],
+              "Transparency": 1
+            }
+          },
+          "Loot": {
+            "$className": "Part",
+            "$properties": {
+              "Anchored": true,
+              "CanCollide": false,
+              "CanQuery": false,
+              "CanTouch": false,
+              "Size": [0.2, 0.2, 0.2],
+              "Transparency": 1
+            }
+          }
+        }
+      },
+      "Remotes": {
+        "$className": "Folder",
+        "ClickStrength": {
+          "$className": "RemoteEvent"
+        },
+        "ObstacleResetAll": {
+          "$className": "RemoteEvent"
+        },
+        "ObstacleBroken": {
+          "$className": "RemoteEvent"
+        },
+        "ObstacleHit": {
+          "$className": "RemoteEvent"
+        },
+        "ObstacleHitVisual": {
+          "$className": "RemoteEvent"
+        },
+        "Rebirth": {
+          "$className": "RemoteEvent"
+        },
+        "LootCollected": {
+          "$className": "RemoteEvent"
+        },
+        "InventoryUpdated": {
+          "$className": "RemoteEvent"
+        },
+        "SellItem": {
+          "$className": "RemoteEvent"
+        },
+        "SellAll": {
+          "$className": "RemoteEvent"
+        },
+        "PurchaseStatUpgrade": {
+          "$className": "RemoteEvent"
+        },
+        "PurchaseWeapon": {
+          "$className": "RemoteEvent"
+        },
+        "EquipWeapon": {
+          "$className": "RemoteEvent"
+        },
+        "WeaponShopUpdated": {
+          "$className": "RemoteEvent"
+        }
+      }
+    },
+
+    "ServerScriptService": {
+      "Server": {
+        "$path": "src/server"
+      }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "Client": {
+          "$path": "src/client"
+        }
+      }
+    },
+
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      },
+      "Baseplate": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Color": [
+            0.38823,
+            0.37254,
+            0.38823
+          ],
+          "Locked": true,
+          "Position": [
+            0,
+            -10,
+            0
+          ],
+          "Size": [
+            512,
+            20,
+            512
+          ]
+        }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Ambient": [
+          0,
+          0,
+          0
+        ],
+        "Brightness": 2,
+        "GlobalShadows": true,
+        "Outlines": false,
+        "Technology": "Voxel"
+      }
+    },
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    }
+  }
+}

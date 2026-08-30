@@ -1,0 +1,21 @@
+---
+description: Core project rules — always active
+alwaysApply: true
+---
+
+# Project: [Your Game Name]
+
+This is a Roblox incremental simulator built in Luau. **The single source of truth for all game design, systems, formulas, and economy is `GDD.md` in the project root.** Before implementing any system (progression, upgrades, zones, loot, economy, rebirth), read the relevant section of `GDD.md` first. Do not invent numbers, formulas, or mechanics that aren't specified there — if something isn't covered, stop and ask rather than guessing.
+
+## Non-negotiable technical rules (full detail in GDD.md Section 5)
+- Every script begins with `--!strict` (add `--!native` only on math-heavy modules per GDD 5.1).
+- Never use `wait()`, `delay()`, `spawn()`, or raw `coroutine.resume()` — use the `task` library.
+- Never write polling loops (`while true do task.wait() end`) to check state. Use signals, `:GetPropertyChangedSignal()`, BindableEvents, or scoped one-shot `task.delay`/`task.spawn` calls tied to an actual event.
+- Never use `Instance.new()` + `:Destroy()` for high-frequency objects (debris, effects, loot nodes). Use the pooling pattern in GDD 5.6.
+- Server never handles visuals/tweens/UI/audio — see GDD 5.5 "Server is Blind" rule.
+
+## Scope boundary — READ THIS BEFORE TOUCHING ANYTHING UI-RELATED
+See `10-ui-boundary.mdc` for the full rule. Summary: **do not design, style, or build any UI.** Wire up the logic hooks (RemoteEvents, data to display, functions UI can call) and stop there.
+
+## When in doubt
+If a requested task requires a design decision not covered in `GDD.md` (a new formula, an unspecced number, a system not yet documented), do not invent a plausible-sounding default. Ask, or implement the surrounding logic with a clearly marked placeholder/TODO referencing the missing spec.

@@ -1,0 +1,19 @@
+---
+description: Technical performance rules for all Luau scripts
+globs: ["**/*.lua", "**/*.luau"]
+alwaysApply: false
+---
+
+# Optimization & Architecture Rules
+
+Full detail lives in `GDD.md` Section 5 — read it before writing any script that involves loops, events, networking, or object creation. Quick-reference summary:
+
+1. **Typing/perf directives:** `--!strict` always; `--!native` only on math-heavy modules (raycasting, pathfinding, damage calc) — not on simple UI-wiring or event-handler scripts.
+2. **Task library only:** `task.wait`, `task.delay`, `task.spawn`, `task.defer`. Never `wait()`, `delay()`, `spawn()`.
+3. **Zero-Polling Rule:** no `while true do task.wait() end` state-checking loops. Use signals or scoped one-shot delays tied to real events (see GDD 5.2, 5.7 for the auto-hit contact-damage pattern, and the loot-respawn pattern already discussed in this project).
+4. **Object pooling:** never rapid-fire `Instance.new()` + `:Destroy()`. Pool and recycle via `ReplicatedStorage` pooler module (GDD 5.6).
+5. **Network discipline:** server never touches visuals/UI/audio (GDD 5.5). RemoteEvents send small deltas only, rate-limited per client.
+6. **Per-player private instancing:** zone/obstacle fields are private per player, not shared server state (GDD Section 1.4).
+7. **Data-driven config:** stat upgrades, weapons, auras, zone parameters live in ModuleScript config tables (GDD Section 2.5), not hardcoded per-item branches — new content should be a new table entry, not new code.
+
+If a task requires deviating from any of these (e.g. a legitimate one-off use of a banned pattern), flag it explicitly and explain why rather than silently doing it.
