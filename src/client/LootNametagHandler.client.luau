@@ -13,9 +13,11 @@ local CashUtil = require(ReplicatedStorage.Shared.CashUtil)
 local LootConfig = require(ReplicatedStorage.Shared.LootConfig)
 local LootModelUtil = require(ReplicatedStorage.Shared.LootModelUtil)
 local LootNametagConfig = require(ReplicatedStorage.Shared.LootNametagConfig)
+local LootPresentationConfig = require(ReplicatedStorage.Shared.LootPresentationConfig)
 local NumberFormatter = require(ReplicatedStorage.Shared.NumberFormatter)
 local ProgressionConfig = require(ReplicatedStorage.Shared.ProgressionConfig)
 local LootNametagPool = require(script.Parent.LootNametagPool)
+local ClientPresentationDistance = require(script.Parent.ClientPresentationDistance)
 
 local LOOT_PICKUP_TAG = "LootPickup"
 local LOOT_MODEL_WAIT_TIMEOUT = 5
@@ -29,6 +31,7 @@ type LootNametagState = {
 
 local nametagStates: { [Model]: LootNametagState } = {}
 local trackedModels: { [Model]: boolean } = {}
+local warnedMissingAdornee: { [Model]: boolean } = {}
 local pendingNametagDescendantAdded: { [Model]: RBXScriptConnection } = {}
 local pendingNametagTimeout: { [Model]: thread } = {}
 local player = Players.LocalPlayer
@@ -40,6 +43,12 @@ local function getLocalCashMultiplier(): number
 	end
 
 	return 1
+end
+
+local function isLootWithinPresentationRange(lootModel: Model): boolean
+	local distanceStuds =
+		ClientPresentationDistance.getDistanceToPosition(LootModelUtil.getLootWorldPosition(lootModel))
+	return LootPresentationConfig.isWithinPresentationDistance(distanceStuds)
 end
 
 local function resolveNametagAdornee(lootModel: Model, allowPrimaryPartFallback: boolean): (LootNametagAdornee?, boolean)
@@ -137,6 +146,7 @@ local function clearLootNametagState(lootModel: Model): ()
 	local state = nametagStates[lootModel]
 	if state == nil then
 		trackedModels[lootModel] = nil
+		warnedMissingAdornee[lootModel] = nil
 		return
 	end
 
@@ -144,6 +154,20 @@ local function clearLootNametagState(lootModel: Model): ()
 	LootNametagPool.release(state.billboard)
 	nametagStates[lootModel] = nil
 	trackedModels[lootModel] = nil
+	warnedMissingAdornee[lootModel] = nil
+end
+
+local function refreshNametagPresentation(lootModel: Model, state: LootNametagState): ()
+	local adornee = state.billboard.Adornee
+	if adornee == nil then
+		return
+	end
+
+	local worldPosition = if adornee:IsA("Attachment")
+		then adornee.WorldPosition
+		else (adornee :: BasePart).Position
+	local distanceStuds = ClientPresentationDistance.getDistanceToPosition(worldPosition)
+	state.billboard.Enabled = LootPresentationConfig.isWithinPresentationDistance(distanceStuds)
 end
 
 local function bindNametagToLoot(lootModel: Model, adornee: LootNametagAdornee, usedPrimaryPartFallback: boolean): boolean
@@ -162,6 +186,9 @@ local function bindNametagToLoot(lootModel: Model, adornee: LootNametagAdornee, 
 	end
 
 	billboard.Adornee = adornee
+	-- Camera-distance safety net only; the real cutoff is refreshNametagPresentation's
+	-- character-distance Enabled toggle below, matching LootSpinHandler's cutoff distance.
+	billboard.MaxDistance = LootPresentationConfig.MAX_VISIBLE_DISTANCE_STUDS
 	if adornee:IsA("Attachment") then
 		billboard.Parent = lootModel
 	else
@@ -174,6 +201,8 @@ local function bindNametagToLoot(lootModel: Model, adornee: LootNametagAdornee, 
 			clearLootNametagState(lootModel)
 		end),
 	}
+
+	refreshNametagPresentation(lootModel, nametagStates[lootModel])
 
 	return true
 end
@@ -205,8 +234,27 @@ local function tryBindNametag(lootModel: Model, allowPrimaryPartFallback: boolea
 	return true
 end
 
+local function warnMissingAdorneeOnce(lootModel: Model): ()
+	if warnedMissingAdornee[lootModel] then
+		return
+	end
+
+	if not isLootWithinPresentationRange(lootModel) then
+		return
+	end
+
+	warnedMissingAdornee[lootModel] = true
+	warn(
+		`[LootNametagHandler] Loot model {lootModel:GetFullName()} is missing {LootNametagConfig.NAMETAG_ANCHOR_NAME} and PrimaryPart`
+	)
+end
+
 local function listenForNametagAdornee(lootModel: Model): ()
 	if pendingNametagDescendantAdded[lootModel] ~= nil then
+		return
+	end
+
+	if not isLootWithinPresentationRange(lootModel) then
 		return
 	end
 
@@ -216,8 +264,6 @@ local function listenForNametagAdornee(lootModel: Model): ()
 			return
 		end
 
-		-- PrimaryPart often replicates with NametagAnchor already parented under it, so only
-		-- the BasePart fires DescendantAdded. Retry anchor lookup without PrimaryPart fallback.
 		if descendant:IsA("BasePart") then
 			tryBindNametag(lootModel, false)
 		end
@@ -233,7 +279,6 @@ local function listenForNametagAdornee(lootModel: Model): ()
 		disconnectPendingNametagWait(lootModel)
 
 		if not trackedModels[lootModel] or not CollectionService:HasTag(lootModel, LOOT_PICKUP_TAG) then
-			trackedModels[lootModel] = nil
 			return
 		end
 
@@ -241,15 +286,47 @@ local function listenForNametagAdornee(lootModel: Model): ()
 			return
 		end
 
-		warn(`[LootNametagHandler] Loot model {lootModel:GetFullName()} is missing {LootNametagConfig.NAMETAG_ANCHOR_NAME} and PrimaryPart`)
-		trackedModels[lootModel] = nil
+		warnMissingAdorneeOnce(lootModel)
+		listenForNametagAdornee(lootModel)
 	end)
 
 	tryBindNametag(lootModel, false)
 end
 
+local function tryTrackLootNametag(lootModel: Model): ()
+	if not isLootWithinPresentationRange(lootModel) then
+		disconnectPendingNametagWait(lootModel)
+		return
+	end
+
+	if tryBindNametag(lootModel, false) then
+		return
+	end
+
+	listenForNametagAdornee(lootModel)
+end
+
+local function refreshAllNametagPresentation(): ()
+	for lootModel, state in nametagStates do
+		if lootModel.Parent == nil then
+			continue
+		end
+
+		refreshNametagPresentation(lootModel, state)
+	end
+
+	for lootModel in trackedModels do
+		if lootModel.Parent == nil then
+			continue
+		end
+
+		tryTrackLootNametag(lootModel)
+	end
+end
+
 local function trackLootModel(lootModel: Model): ()
 	if trackedModels[lootModel] then
+		tryTrackLootNametag(lootModel)
 		return
 	end
 
@@ -266,11 +343,7 @@ local function trackLootModel(lootModel: Model): ()
 			return
 		end
 
-		if tryBindNametag(lootModel, false) then
-			return
-		end
-
-		listenForNametagAdornee(lootModel)
+		tryTrackLootNametag(lootModel)
 	end)
 end
 
@@ -307,20 +380,16 @@ end
 CollectionService:GetInstanceAddedSignal(LOOT_PICKUP_TAG):Connect(onLootPickupAdded)
 CollectionService:GetInstanceRemovedSignal(LOOT_PICKUP_TAG):Connect(onLootPickupRemoved)
 player:GetAttributeChangedSignal("Rebirths"):Connect(refreshTrackedNametagWorth)
+ClientPresentationDistance.subscribeRefresh(refreshAllNametagPresentation)
 
 --[[
 	SELF-AUDIT (Section 7):
 	- lootModel.Destroying:Connect — stored in nametagStates[lootModel].destroyingConnection,
-	  disconnected in clearLootNametagState; guarded by trackedModels against double-track. OK.
-	- CollectionService LootPickup added/removed signals:Connect — script-lifetime singletons;
-	  removed signal drives pool release when loot is collected. OK.
-	- Rebirths GetAttributeChangedSignal — refreshes worth labels when cash multiplier changes. OK.
-	- task.defer (trackLootModel) — single immediate deferral; falls back to DescendantAdded wait
-	  for pooled re-activate replication. OK.
-	- task.delay (LOOT_MODEL_WAIT_TIMEOUT) — one-shot per tracked model; cancelled on bind or
-	  clearLootNametagState; warns only if adornee still missing after timeout. OK.
-	- lootModel.DescendantAdded:Connect — pendingNametagDescendantAdded per model; retries anchor
-	  lookup on NametagAnchor or BasePart (anchor may replicate nested under PrimaryPart); PrimaryPart
-	  fallback only after LOOT_MODEL_WAIT_TIMEOUT. OK.
-	- LootNametagPool.acquire/release — BillboardGui pooling; no hot-path Instance.new. OK.
+	  disconnected in clearLootNametagState. OK.
+	- CollectionService LootPickup added/removed signals:Connect — script-lifetime singletons. OK.
+	- ClientPresentationDistance.subscribeRefresh — retries bind when player moves within range. OK.
+	- task.defer / task.delay — scoped one-shot deferrals per model bind. OK.
+	- lootModel.DescendantAdded:Connect — pendingNametagDescendantAdded per model; disconnected in
+	  disconnectPendingNametagWait; timeout re-arms listenForNametagAdornee when still missing so
+	  slow-streaming loot self-heals instead of being abandoned; warns only for nearby loot once. OK.
 ]]

@@ -7,6 +7,7 @@ local ObstacleAPI = require(script.Parent.ObstacleAPI)
 local TripInventoryManager = require(script.Parent.TripInventoryManager)
 local TutorialService = require(script.Parent.TutorialService)
 local LootConfig = require(ReplicatedStorage.Shared.LootConfig)
+local LootModelUtil = require(ReplicatedStorage.Shared.LootModelUtil)
 local LootPool = require(script.Parent.LootPool)
 local ObstacleConfig = require(ReplicatedStorage.Shared.ObstacleConfig)
 local SandObstacleUtil = require(ReplicatedStorage.Shared.SandObstacleUtil)
@@ -15,6 +16,7 @@ local OBSTACLE_TAG = "Obstacle"
 local INSIDE_OBSTACLE_LOOT_NAME = "InsideObstacleLoot"
 local REMOTES_FOLDER_NAME = "Remotes"
 local LOOT_COLLECTED_REMOTE_NAME = "LootCollected"
+local SOURCE_OBSTACLE_VALUE_NAME = "SourceObstacle"
 
 -- Per-zone loot spawn tuning lives in LootConfig (RespawnDelay, StaleTimeout).
 local MAX_ACTIVE_LOOT_PER_ZONE = 5
@@ -28,6 +30,14 @@ type SpawnPointState = {
 	visualSegment: BasePart,
 }
 
+type StaleItemSwapJob = {
+	model: Model,
+	currentSpawnPart: BasePart,
+	newSpawnPart: BasePart,
+	newItemEntry: LootConfig.LootItemEntry,
+	zoneNumber: number,
+}
+
 local spawnPointsByZone: { [number]: { BasePart } } = {}
 local spawnPointStates: { [BasePart]: SpawnPointState } = {}
 local occupiedSpawnPoints: { [BasePart]: Model } = {}
@@ -38,6 +48,8 @@ local activeLootCountByZone: { [number]: number } = {}
 local activeItemCountsByZone: { [number]: { [string]: number } } = {}
 local modelToItemId: { [Model]: string } = {}
 local staleTimerByModel: { [Model]: thread } = {}
+local staleItemSwapQueue: { StaleItemSwapJob } = {}
+local staleItemSwapDrainPending = false
 
 local lootCollectedRemote: RemoteEvent
 
@@ -47,6 +59,9 @@ local fillZoneToCap: (zoneNumber: number) -> ()
 local cancelStaleTimer: (model: Model) -> ()
 local scheduleStaleTimer: (model: Model, zoneNumber: number) -> ()
 local performSilentRespawn: (model: Model) -> ()
+local relocateLootModel: (model: Model, currentSpawnPart: BasePart, newSpawnPart: BasePart, zoneNumber: number) -> ()
+local enqueueStaleItemSwap: (job: StaleItemSwapJob) -> ()
+local drainStaleItemSwapQueue: () -> ()
 local onLootCollected: (player: Player, spawnPart: BasePart, model: Model, itemEntry: LootConfig.LootItemEntry) -> boolean
 
 local function getActiveLootCountForZone(zoneNumber: number): number
@@ -376,7 +391,17 @@ local function activateLootModelAtSpawnPoint(
 		spawnState.blockerSegment,
 		itemEntry,
 		function(playerWhoTriggered: Player)
-			if not ObstacleAPI.isObstacleBrokenForPlayer(playerWhoTriggered, spawnState.blockerSegment) then
+			local currentSpawnPart = modelToSpawnPoint[lootModel]
+			if currentSpawnPart == nil then
+				return false
+			end
+
+			local currentSpawnState = spawnPointStates[currentSpawnPart]
+			if currentSpawnState == nil then
+				return false
+			end
+
+			if not ObstacleAPI.isObstacleBrokenForPlayer(playerWhoTriggered, currentSpawnState.blockerSegment) then
 				return false
 			end
 
@@ -397,6 +422,132 @@ local function activateLootModelAtSpawnPoint(
 			return onLootCollected(playerWhoTriggered, currentSpawnPart, lootModel, currentItemEntry)
 		end
 	)
+end
+
+local function bumpLootPoseVersion(model: Model): ()
+	local currentVersion = model:GetAttribute(LootModelUtil.LOOT_POSE_VERSION_ATTRIBUTE)
+	local nextVersion = if typeof(currentVersion) == "number" then currentVersion + 1 else 1
+	model:SetAttribute(LootModelUtil.LOOT_POSE_VERSION_ATTRIBUTE, nextVersion)
+end
+
+local function updateSourceObstacleValue(model: Model, blockerSegment: BasePart): ()
+	local sourceObstacleValue = model:FindFirstChild(SOURCE_OBSTACLE_VALUE_NAME)
+	if sourceObstacleValue == nil or not sourceObstacleValue:IsA("ObjectValue") then
+		return
+	end
+
+	sourceObstacleValue.Value = blockerSegment
+end
+
+relocateLootModel = function(model: Model, currentSpawnPart: BasePart, newSpawnPart: BasePart, zoneNumber: number): ()
+	local newSpawnState = spawnPointStates[newSpawnPart]
+	if newSpawnState == nil then
+		scheduleStaleTimer(model, zoneNumber)
+		return
+	end
+
+	local spawnCFrame = SandObstacleUtil.computeLootSpawnCFrame(
+		newSpawnState.visualSegment,
+		newSpawnPart,
+		LOOT_SPAWN_CLEARANCE
+	)
+
+	occupiedSpawnPoints[currentSpawnPart] = nil
+	occupiedSpawnPoints[newSpawnPart] = model
+	modelToSpawnPoint[model] = newSpawnPart
+
+	model:PivotTo(spawnCFrame)
+	updateSourceObstacleValue(model, newSpawnState.blockerSegment)
+	bumpLootPoseVersion(model)
+	scheduleStaleTimer(model, zoneNumber)
+end
+
+local function isStaleSwapJobStillValid(job: StaleItemSwapJob): boolean
+	if modelToSpawnPoint[job.model] ~= job.currentSpawnPart then
+		return false
+	end
+
+	if occupiedSpawnPoints[job.currentSpawnPart] ~= job.model then
+		return false
+	end
+
+	if modelToItemId[job.model] == nil then
+		return false
+	end
+
+	return true
+end
+
+local function performQueuedItemSwap(job: StaleItemSwapJob): ()
+	if not isStaleSwapJobStillValid(job) then
+		return
+	end
+
+	local newSpawnPart = job.newSpawnPart
+	if occupiedSpawnPoints[newSpawnPart] ~= nil or spawnPointStates[newSpawnPart] == nil then
+		local fallbackSpawnPart = pickRandomAlternateSpawnPointInZone(job.zoneNumber, job.currentSpawnPart)
+		if fallbackSpawnPart == nil then
+			scheduleStaleTimer(job.model, job.zoneNumber)
+			return
+		end
+		newSpawnPart = fallbackSpawnPart
+	end
+
+	local currentItemId = modelToItemId[job.model]
+	local replacementModel = LootPool.acquire(job.newItemEntry.ItemId)
+	if replacementModel == nil then
+		scheduleStaleTimer(job.model, job.zoneNumber)
+		return
+	end
+
+	if currentItemId ~= nil then
+		decrementActiveItemCountForZone(job.zoneNumber, currentItemId)
+	end
+	incrementActiveItemCountForZone(job.zoneNumber, job.newItemEntry.ItemId)
+
+	occupiedSpawnPoints[job.currentSpawnPart] = nil
+	modelToSpawnPoint[job.model] = nil
+	modelToItemId[job.model] = nil
+	cancelStaleTimer(job.model)
+	LootPool.release(job.model)
+
+	occupiedSpawnPoints[newSpawnPart] = replacementModel
+	modelToSpawnPoint[replacementModel] = newSpawnPart
+	modelToItemId[replacementModel] = job.newItemEntry.ItemId
+
+	if not activateLootModelAtSpawnPoint(replacementModel, newSpawnPart, job.zoneNumber, job.newItemEntry) then
+		clearActiveLootAtSpawnPoint(newSpawnPart, job.zoneNumber, replacementModel)
+		return
+	end
+
+	scheduleStaleTimer(replacementModel, job.zoneNumber)
+end
+
+drainStaleItemSwapQueue = function(): ()
+	staleItemSwapDrainPending = false
+
+	local job = table.remove(staleItemSwapQueue, 1)
+	if job == nil then
+		return
+	end
+
+	performQueuedItemSwap(job)
+
+	if #staleItemSwapQueue > 0 then
+		staleItemSwapDrainPending = true
+		task.delay(0, drainStaleItemSwapQueue)
+	end
+end
+
+enqueueStaleItemSwap = function(job: StaleItemSwapJob): ()
+	table.insert(staleItemSwapQueue, job)
+
+	if staleItemSwapDrainPending then
+		return
+	end
+
+	staleItemSwapDrainPending = true
+	task.delay(0, drainStaleItemSwapQueue)
 end
 
 performSilentRespawn = function(model: Model): ()
@@ -429,48 +580,23 @@ performSilentRespawn = function(model: Model): ()
 		return
 	end
 
-	local alternateSpawnState = spawnPointStates[alternateSpawnPart]
-	if alternateSpawnState == nil then
+	if spawnPointStates[alternateSpawnPart] == nil then
 		scheduleStaleTimer(model, zoneNumber)
 		return
 	end
 
-	occupiedSpawnPoints[currentSpawnPart] = nil
-
-	if currentItemId ~= nil and currentItemId ~= newItemEntry.ItemId then
-		decrementActiveItemCountForZone(zoneNumber, currentItemId)
-		incrementActiveItemCountForZone(zoneNumber, newItemEntry.ItemId)
-	end
-
-	local activeModel = model
-	if currentItemId ~= newItemEntry.ItemId then
-		local replacementModel = LootPool.acquire(newItemEntry.ItemId)
-		if replacementModel == nil then
-			occupiedSpawnPoints[currentSpawnPart] = model
-			if currentItemId ~= nil and currentItemId ~= newItemEntry.ItemId then
-				incrementActiveItemCountForZone(zoneNumber, currentItemId)
-				decrementActiveItemCountForZone(zoneNumber, newItemEntry.ItemId)
-			end
-			scheduleStaleTimer(model, zoneNumber)
-			return
-		end
-
-		LootPool.release(model)
-		modelToSpawnPoint[model] = nil
-		modelToItemId[model] = nil
-		activeModel = replacementModel
-	end
-
-	occupiedSpawnPoints[alternateSpawnPart] = activeModel
-	modelToSpawnPoint[activeModel] = alternateSpawnPart
-	modelToItemId[activeModel] = newItemEntry.ItemId
-
-	if not activateLootModelAtSpawnPoint(activeModel, alternateSpawnPart, zoneNumber, newItemEntry) then
-		clearActiveLootAtSpawnPoint(alternateSpawnPart, zoneNumber, activeModel)
+	if currentItemId == newItemEntry.ItemId then
+		relocateLootModel(model, currentSpawnPart, alternateSpawnPart, zoneNumber)
 		return
 	end
 
-	scheduleStaleTimer(activeModel, zoneNumber)
+	enqueueStaleItemSwap({
+		model = model,
+		currentSpawnPart = currentSpawnPart,
+		newSpawnPart = alternateSpawnPart,
+		newItemEntry = newItemEntry,
+		zoneNumber = zoneNumber,
+	})
 end
 
 onLootCollected = function(player: Player, spawnPart: BasePart, model: Model, itemEntry: LootConfig.LootItemEntry): boolean
@@ -661,10 +787,16 @@ end)
 	- task.delay (per-collection zone respawn; per-node StaleTimeout silent respawn) — independent
 	  one-shot delays; collected respawn picks random free spawn point at fire time; stale timer
 	  cancels via task.cancel on successful collect or cleanup. No captured Player/Model. OK.
+	- task.delay(0) stale-item swap drain — one-shot chain, armed only while staleItemSwapQueue
+	  is non-empty (staleItemSwapDrainPending); at most one release+acquire+activate per frame.
+	  Idle when the queue is empty. Not a polling loop. OK.
+	- LootPoseVersion attribute — bumped on same-item relocate only; cleared in LootPool.resetModel.
+	  Client spin rebases from it; no extra connections on the server. OK.
 	- CollectionService obstacle tag signals:Connect — script-lifetime singletons. OK.
 	- ProximityPrompt.Triggered:Connect — wired in LootPool.activate per model; disconnected on
-	  successful collect or in LootPool.release. OK.
+	  successful collect or in LootPool.release. Same-item relocate keeps the existing connection
+	  and canCollect/onCollected read live modelToSpawnPoint. OK.
 	- Instance.new (Folder, RemoteEvent) — one-time getOrCreate* init for LootCollected remote. OK.
-	- Model Clone/release — confined to LootPool; LootManager calls release on pickup/cleanup. OK.
+	- Model Clone/release — confined to LootPool; LootManager calls release on pickup/cleanup/swap. OK.
 	- Loot spawn CFrame computed at spawn time from segment live Position/Size (GDD 1.5). OK.
 ]]

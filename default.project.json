@@ -32,7 +32,7 @@
           "FireClick": {
             "$className": "Sound",
             "$properties": {
-              "SoundId": "rbxassetid://120440118711735"
+              "SoundId": "rbxassetid://80138779656583"
             }
           },
           "LevelUp": {
@@ -150,9 +150,6 @@
         "ObstacleHit": {
           "$className": "RemoteEvent"
         },
-        "ObstacleHitVisual": {
-          "$className": "RemoteEvent"
-        },
         "Rebirth": {
           "$className": "RemoteEvent"
         },
@@ -199,7 +196,10 @@
 
     "Workspace": {
       "$properties": {
-        "FilteringEnabled": true
+        "FilteringEnabled": true,
+        "StreamingEnabled": true,
+        "StreamingMinRadius": 256,
+        "StreamingTargetRadius": 1024
       },
       "Baseplate": {
         "$className": "Part",

@@ -144,7 +144,13 @@ local function configureProximityPrompt(prompt: ProximityPrompt, itemEntry: Loot
 	prompt.Enabled = false
 end
 
+local function configureLootModelStreaming(model: Model): ()
+	model.ModelStreamingMode = Enum.ModelStreamingMode.Atomic
+end
+
 local function prepareTemplateModel(model: Model): boolean
+	configureLootModelStreaming(model)
+
 	local primaryPart = LootModelUtil.findPrimaryPart(model)
 	if primaryPart == nil then
 		warn(`[LootPool] Loot template {model:GetFullName()} is missing a PrimaryPart`)
@@ -219,6 +225,7 @@ local function resetModel(model: Model): ()
 	model:SetAttribute("LootId", nil)
 	model:SetAttribute("Rarity", nil)
 	model:SetAttribute("CashValue", nil)
+	model:SetAttribute(LootModelUtil.LOOT_POSE_VERSION_ATTRIBUTE, nil)
 	local sourceObstacleValue = model:FindFirstChild(SOURCE_OBSTACLE_VALUE_NAME)
 	if sourceObstacleValue and sourceObstacleValue:IsA("ObjectValue") then
 		sourceObstacleValue.Value = nil
@@ -334,5 +341,7 @@ return LootPool
 	  getOrCreateSourceObstacleValue when the pooled model lacks one. OK.
 	- LootPrefabSetup.SetupLootPrefab — once per unique template in loadTemplates; also on new
 	  clones in acquire (idempotent). WeldConstraints guarded; clones inherit welds/reparented NametagAnchor. OK.
+	- configureLootModelStreaming — ModelStreamingMode.Atomic on templates/clones. OK.
 	- template:Clone() — confined to acquire(); released models return to pool instead of Destroy. OK.
+	- LootPoseVersion attribute — cleared in resetModel with the other spawn attributes. OK.
 ]]

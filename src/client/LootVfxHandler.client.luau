@@ -8,7 +8,9 @@
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local ClientPresentationDistance = require(script.Parent.ClientPresentationDistance)
 local LootModelUtil = require(ReplicatedStorage.Shared.LootModelUtil)
+local LootPresentationConfig = require(ReplicatedStorage.Shared.LootPresentationConfig)
 local LootVfxPool = require(script.Parent.LootVfxPool)
 
 local LOOT_PICKUP_TAG = "LootPickup"
@@ -21,6 +23,7 @@ type LootVfxState = {
 
 local vfxStates: { [Model]: LootVfxState } = {}
 local trackedModels: { [Model]: boolean } = {}
+local warnedMissingPrimaryPart: { [Model]: boolean } = {}
 local pendingPrimaryPartAdded: { [Model]: RBXScriptConnection } = {}
 local pendingPrimaryPartTimeout: { [Model]: thread } = {}
 
@@ -38,19 +41,29 @@ local function disconnectPendingPrimaryPartWait(lootModel: Model): ()
 	end
 end
 
-local function clearLootVfxState(lootModel: Model): ()
+local function isLootWithinPresentationRange(lootModel: Model): boolean
+	local distanceStuds =
+		ClientPresentationDistance.getDistanceToPosition(LootModelUtil.getLootWorldPosition(lootModel))
+	return LootPresentationConfig.isWithinPresentationDistance(distanceStuds)
+end
+
+local function stopLootVfxPresentation(lootModel: Model): ()
 	disconnectPendingPrimaryPartWait(lootModel)
 
 	local state = vfxStates[lootModel]
 	if state == nil then
-		trackedModels[lootModel] = nil
 		return
 	end
 
 	state.destroyingConnection:Disconnect()
 	LootVfxPool.release(state.anchorPart)
 	vfxStates[lootModel] = nil
+end
+
+local function clearLootVfxState(lootModel: Model): ()
+	stopLootVfxPresentation(lootModel)
 	trackedModels[lootModel] = nil
+	warnedMissingPrimaryPart[lootModel] = nil
 end
 
 local function bindVfxToPrimaryPart(lootModel: Model, primaryPart: BasePart): boolean
@@ -97,8 +110,25 @@ local function tryBindLootVfx(lootModel: Model): boolean
 	return bindVfxToPrimaryPart(lootModel, primaryPart)
 end
 
+local function warnMissingPrimaryPartOnce(lootModel: Model): ()
+	if warnedMissingPrimaryPart[lootModel] then
+		return
+	end
+
+	if not isLootWithinPresentationRange(lootModel) then
+		return
+	end
+
+	warnedMissingPrimaryPart[lootModel] = true
+	warn(`[LootVfxHandler] Loot model {lootModel:GetFullName()} is missing PrimaryPart; skipping loot VFX`)
+end
+
 local function listenForPrimaryPart(lootModel: Model): ()
 	if pendingPrimaryPartAdded[lootModel] ~= nil then
+		return
+	end
+
+	if not isLootWithinPresentationRange(lootModel) then
 		return
 	end
 
@@ -117,32 +147,6 @@ local function listenForPrimaryPart(lootModel: Model): ()
 		disconnectPendingPrimaryPartWait(lootModel)
 
 		if not trackedModels[lootModel] or not CollectionService:HasTag(lootModel, LOOT_PICKUP_TAG) then
-			trackedModels[lootModel] = nil
-			return
-		end
-
-		warn(`[LootVfxHandler] Loot model {lootModel:GetFullName()} is missing PrimaryPart; skipping loot VFX`)
-		trackedModels[lootModel] = nil
-	end)
-
-	tryBindLootVfx(lootModel)
-end
-
-local function trackLootModel(lootModel: Model): ()
-	if trackedModels[lootModel] then
-		return
-	end
-
-	trackedModels[lootModel] = true
-
-	task.defer(function()
-		if not trackedModels[lootModel] or lootModel.Parent == nil then
-			trackedModels[lootModel] = nil
-			return
-		end
-
-		if not CollectionService:HasTag(lootModel, LOOT_PICKUP_TAG) then
-			trackedModels[lootModel] = nil
 			return
 		end
 
@@ -150,8 +154,57 @@ local function trackLootModel(lootModel: Model): ()
 			return
 		end
 
+		warnMissingPrimaryPartOnce(lootModel)
 		listenForPrimaryPart(lootModel)
 	end)
+
+	tryBindLootVfx(lootModel)
+end
+
+local function tryTrackLootVfx(lootModel: Model): ()
+	if not isLootWithinPresentationRange(lootModel) then
+		stopLootVfxPresentation(lootModel)
+		return
+	end
+
+	if tryBindLootVfx(lootModel) then
+		return
+	end
+
+	listenForPrimaryPart(lootModel)
+end
+
+local function trackLootModel(lootModel: Model): ()
+	if trackedModels[lootModel] then
+		tryTrackLootVfx(lootModel)
+		return
+	end
+
+	trackedModels[lootModel] = true
+
+	task.defer(function()
+		if not trackedModels[lootModel] or lootModel.Parent == nil then
+			clearLootVfxState(lootModel)
+			return
+		end
+
+		if not CollectionService:HasTag(lootModel, LOOT_PICKUP_TAG) then
+			clearLootVfxState(lootModel)
+			return
+		end
+
+		tryTrackLootVfx(lootModel)
+	end)
+end
+
+local function refreshAllLootVfx(): ()
+	for lootModel in trackedModels do
+		if lootModel.Parent == nil then
+			continue
+		end
+
+		tryTrackLootVfx(lootModel)
+	end
 end
 
 local function onLootPickupAdded(instance: Instance): ()
@@ -176,17 +229,16 @@ end
 
 CollectionService:GetInstanceAddedSignal(LOOT_PICKUP_TAG):Connect(onLootPickupAdded)
 CollectionService:GetInstanceRemovedSignal(LOOT_PICKUP_TAG):Connect(onLootPickupRemoved)
+ClientPresentationDistance.subscribeRefresh(refreshAllLootVfx)
 
 --[[
 	SELF-AUDIT (Section 7):
 	- lootModel.Destroying:Connect — stored in vfxStates[lootModel].destroyingConnection,
-	  disconnected in clearLootVfxState; guarded by trackedModels against double-track. OK.
-	- CollectionService LootPickup added/removed signals:Connect — script-lifetime singletons;
-	  removed signal drives cleanup when loot is pooled on pickup. OK.
-	- task.defer (trackLootModel) — single immediate deferral for replicated PrimaryPart;
-	  falls back to DescendantAdded wait for pooled re-activate replication. OK.
-	- task.delay (PRIMARY_PART_WAIT_TIMEOUT) — one-shot per tracked model; cancelled on bind or
-	  clearLootVfxState; warns only if PrimaryPart still missing after timeout. OK.
+	  disconnected in clearLootVfxState. OK.
+	- CollectionService LootPickup added/removed signals:Connect — script-lifetime singletons. OK.
+	- ClientPresentationDistance.subscribeRefresh — retries bind when player moves within range. OK.
+	- task.defer / task.delay — scoped one-shot deferrals per model bind. OK.
 	- lootModel.DescendantAdded:Connect — pendingPrimaryPartAdded per model; disconnected in
-	  disconnectPendingPrimaryPartWait on bind, tag removal, or timeout. OK.
+	  disconnectPendingPrimaryPartWait; timeout re-arms listenForPrimaryPart when still missing so
+	  slow-streaming loot self-heals instead of being abandoned; warns only for nearby loot once. OK.
 ]]

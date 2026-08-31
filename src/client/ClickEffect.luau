@@ -24,8 +24,6 @@ local SPARK_Z_INDEX = 95
 local EFFECT_Z_INDEX = 95
 local RANDOM_SCREEN_MARGIN = 48
 local SOUND_PATH = { "Assets", "Sounds", "FireClick" }
-local PLAYBACK_SPEED_MIN = 0.5
-local PLAYBACK_SPEED_MAX = 1.5
 
 local SPARK_COUNT_MIN = 6
 local SPARK_COUNT_MAX = 10
@@ -183,11 +181,7 @@ local function playClickSound(): ()
 		return
 	end
 
-	local playbackSpeed = math.random(
-		math.floor(PLAYBACK_SPEED_MIN * 100),
-		math.floor(PLAYBACK_SPEED_MAX * 100)
-	) / 100
-	SoundPool.play2DWithPlaybackSpeed(template, playbackSpeed)
+	SoundPool.play2D(template)
 end
 
 local function createInitialSparks(clickPos: Vector2, startPx: number, parentGui: ScreenGui): ()
@@ -417,7 +411,7 @@ return {
 	- ObstacleHit OnClientEvent:Connect — script-lifetime singleton in initialize(). OK.
 	- Spark tweens — Tween Completed:Once → ClickEffectPool.release per spark. OK.
 	- Appear/fly/disappear scale tweens — chained Completed:Once; release only after disappear. OK.
-	- Click sound — SoundPool.play2DWithPlaybackSpeed; Ended:Once release inside SoundPool. OK.
+	- Click sound — SoundPool.play2D; Ended:Once release inside SoundPool. OK.
 	- No per-click :Connect() — all teardown via :Once(). OK.
 	- No Instance.new() outside ClickEffectPool/SoundPool on hot path. OK.
 ]]

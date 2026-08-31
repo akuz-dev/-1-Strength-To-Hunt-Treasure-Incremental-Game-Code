@@ -38,10 +38,31 @@ This section defines the mandatory technical architecture for all script generat
   ```
 
 ### 4. StreamingEnabled Workspace Architecture
-- `StreamingEnabled = true` is active to protect mobile/low-end hardware.
+- `StreamingEnabled = true` is set on `Workspace.$properties` in `default.project.json` (Rojo-synced) to protect mobile/low-end hardware.
+- `StreamingMinRadius` is set to **256** studs in `default.project.json`, matching the client presentation cutoff (`LootPresentationConfig.PRESENTATION_DISTANCE_STUDS`) so content within nametag/spin presentation range is never streamed out mid-interaction.
+- `StreamingTargetRadius` is set to **1024** studs in `default.project.json` — the radius Roblox tries to keep loaded around the camera when performance allows (ceiling, vs. `StreamingMinRadius`'s guaranteed floor).
+- `StreamingPauseMode` / `ModelStreamingBehavior` are left at engine defaults — no tuned values are specced yet. Flagging as an open question (see Section 1.6-style open items) rather than inventing numbers; revisit once real per-zone geometry size / player density data exists.
 - **No Asset Assumptions:** Never assume Workspace geometry exists on the client via raw dot notation.
 - **Safe Retrieval:** Use `:WaitForChild("Name", 5)` (5s default timeout) with fallback handling.
 - **Dynamic Tag Tracking:** Use CollectionService (`:GetInstanceAddedSignal()`, `:GetInstanceRemovedSignal()`) to track streamed player characters instead of hardcoded tables.
+
+#### 4.1 Distance-gated client loot presentation
+
+Client loot handlers (`LootSpinHandler`, `LootVfxHandler`, `LootNametagHandler`) only bind presentation within **`PRESENTATION_DISTANCE_STUDS` (256)** of the local character, debounced on movement via `ClientPresentationDistance`. Movement refresh must sample `HumanoidRootPart` on `Heartbeat` — `GetPropertyChangedSignal("Position")` does not fire for Humanoid / physics walking, so far-spawned loot would never retry bind when the player walks into range:
+
+| System | Within 256 studs | Beyond 256 studs |
+| --- | --- | --- |
+| Loot spin (`LootSpinHandler`) | Spin + bob active | Stopped; loot model stays visible if streamed in |
+| Loot VFX (`LootVfxHandler`) | VFX anchor parented | Not bound |
+| Loot nametags (`LootNametagHandler`) | Billboard enabled | Not bound |
+
+- Constants live in `LootPresentationConfig.luau`; motion tuning in `LootSpinConfig.luau` (placeholder until GDD 1.5 specced).
+- **Nametag distance cutoff matches spin's exactly:** `BillboardGui.MaxDistance` is a Roblox engine property measured from the **camera**, not the character, so `LootNametagHandler` cannot rely on it alone as the presentation cutoff (it would drift from the character-distance-based cutoff `LootSpinHandler` uses, which has no engine-level distance property at all). `LootPresentationConfig.MAX_VISIBLE_DISTANCE_STUDS` is therefore set well above `PRESENTATION_DISTANCE_STUDS` (4x) purely as a camera-side safety net; the actual show/hide cutoff is `LootNametagHandler`'s own character-distance `Enabled` toggle at the same 256-stud `PRESENTATION_DISTANCE_STUDS` spin uses.
+- **Out-of-range loot is deferred, not warned** — handlers retry when the player moves closer; warnings only fire once for nearby loot that still lacks a PrimaryPart after the wait timeout.
+- **Slow-streaming loot self-heals:** if a loot model's PrimaryPart/NametagAnchor hasn't replicated yet when the wait timeout elapses, the handler re-arms the same wait (indefinitely, every wait-timeout interval) instead of giving up — it only warns once per model, but keeps retrying so presentation still activates once the geometry finishes streaming, without requiring the player to move or respawn.
+- **Atomic streaming:** each loot pickup `Model` uses `ModelStreamingMode = Atomic`, set in `LootPool.prepareTemplateModel`, so parts replicate together when the model streams in.
+- **Loot spin implementation:** client-local `Workspace:BulkMoveTo` on `PrimaryPart` — one batch per `RenderStepped` frame while any nearby loot is spinning. Do **not** use client-side physics (`AngularVelocity` / unanchoring) on server-anchored loot; it has no visible effect. `Model:PivotTo` / per-part CFrame writes from LocalScripts do not replicate.
+- **Studio loot templates** (`ReplicatedStorage.Assets.Loot/<ItemId>`): at least one `BasePart` descendant; a part named `PrimaryPart` (recommended); `Model.PrimaryPart` set; `NametagAnchor` Attachment for nametags; flat hierarchy (mesh parts as direct children) so `LootPrefabSetup` welds correctly.
 
 ### 5. Network Throttling & Payload Restrictions
 - **"Server is Blind" Rule:** Server handles authoritative logic/vector math only — never visuals, tweens, UI, or audio.

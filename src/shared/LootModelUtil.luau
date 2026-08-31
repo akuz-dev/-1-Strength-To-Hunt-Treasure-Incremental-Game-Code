@@ -3,9 +3,13 @@
 local LootNametagConfig = require(script.Parent.LootNametagConfig)
 
 export type LootModelUtilModule = {
+	LOOT_POSE_VERSION_ATTRIBUTE: string,
 	findPrimaryPart: (model: Model) -> BasePart?,
 	findNametagAnchor: (model: Model) -> Attachment?,
+	getLootWorldPosition: (model: Model) -> Vector3,
 }
+
+local LOOT_POSE_VERSION_ATTRIBUTE = "LootPoseVersion"
 
 local function findPrimaryPart(model: Model): BasePart?
 	local namedPrimaryPart = model:FindFirstChild("PrimaryPart", true)
@@ -28,6 +32,10 @@ local function findPrimaryPart(model: Model): BasePart?
 	return nil
 end
 
+local function getLootWorldPosition(model: Model): Vector3
+	return model:GetPivot().Position
+end
+
 local function findNametagAnchor(model: Model): Attachment?
 	local anchor = model:FindFirstChild(LootNametagConfig.NAMETAG_ANCHOR_NAME, true)
 	if anchor and anchor:IsA("Attachment") then
@@ -38,8 +46,10 @@ local function findNametagAnchor(model: Model): Attachment?
 end
 
 local LootModelUtil: LootModelUtilModule = {
+	LOOT_POSE_VERSION_ATTRIBUTE = LOOT_POSE_VERSION_ATTRIBUTE,
 	findPrimaryPart = findPrimaryPart,
 	findNametagAnchor = findNametagAnchor,
+	getLootWorldPosition = getLootWorldPosition,
 }
 
 return LootModelUtil

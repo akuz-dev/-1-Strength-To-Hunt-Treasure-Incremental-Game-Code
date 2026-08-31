@@ -64,7 +64,6 @@ local obstacleDestroyedEvent: BindableEvent
 local obstacleResetAllRemote: RemoteEvent
 local obstacleBrokenRemote: RemoteEvent
 local obstacleHitRemote: RemoteEvent
-local obstacleHitVisualRemote: RemoteEvent
 
 local function getPlayerHP(runtimeState: ObstacleRuntimeState, userId: number): number?
 	return runtimeState.currentHP[userId]
@@ -285,13 +284,12 @@ local function getOrCreateRemoteEvent(parent: Instance, remoteName: string): Rem
 	return remoteEvent
 end
 
-local function getObstacleRemotes(): (RemoteEvent, RemoteEvent, RemoteEvent, RemoteEvent)
+local function getObstacleRemotes(): (RemoteEvent, RemoteEvent, RemoteEvent)
 	local remotesFolder = getOrCreateRemotesFolder()
 	local resetAll = getOrCreateRemoteEvent(remotesFolder, "ObstacleResetAll")
 	local obstacleBroken = getOrCreateRemoteEvent(remotesFolder, "ObstacleBroken")
 	local obstacleHit = getOrCreateRemoteEvent(remotesFolder, "ObstacleHit")
-	local obstacleHitVisual = getOrCreateRemoteEvent(remotesFolder, "ObstacleHitVisual")
-	return resetAll, obstacleBroken, obstacleHit, obstacleHitVisual
+	return resetAll, obstacleBroken, obstacleHit
 end
 
 local function fireObstacleResetAll(player: Player, resetBlockers: { BasePart }): ()
@@ -322,17 +320,6 @@ local function fireObstacleHit(player: Player, runtimeState: ObstacleRuntimeStat
 	end
 
 	obstacleHitRemote:FireClient(player, clientPart)
-end
-
--- Delta-only: single Instance reference per damage tick, no tables (Section 5.5).
--- Server never references TweenService/Color3/Highlight — flash is entirely client-side (Section 5, "Server is Blind").
-local function fireObstacleHitVisual(player: Player, runtimeState: ObstacleRuntimeState): ()
-	local clientPart = getClientNotifyPart(runtimeState)
-	if clientPart == nil then
-		return
-	end
-
-	obstacleHitVisualRemote:FireClient(player, clientPart)
 end
 
 local function clearTraversalAwardClock(userId: number): ()
@@ -559,7 +546,6 @@ local function runContactDamageLoop(obstacle: BasePart, userId: number): ()
 				end
 
 				if applyDamageTick(obstacle, player, runtimeState) then
-					fireObstacleHitVisual(player, runtimeState)
 					tryAwardTraversalFeedback(player, playerData, runtimeState)
 				end
 			end
@@ -631,7 +617,6 @@ local function onAttackZoneTouched(obstacle: BasePart, userId: number): ()
 
 		local playerData = PlayerDataService.GetData(player)
 		if applyDamageTick(obstacle, player, runtimeState) then
-			fireObstacleHitVisual(player, runtimeState)
 			if playerData then
 				tryAwardTraversalFeedback(player, playerData, runtimeState)
 			end
@@ -968,7 +953,7 @@ end
 registerCollisionGroups()
 
 obstacleDestroyedEvent = getOrCreateObstacleDestroyedEvent()
-obstacleResetAllRemote, obstacleBrokenRemote, obstacleHitRemote, obstacleHitVisualRemote = getObstacleRemotes()
+obstacleResetAllRemote, obstacleBrokenRemote, obstacleHitRemote = getObstacleRemotes()
 
 ObstacleAPI.registerResetPlayerObstacles(resetPlayerObstacleHP)
 ObstacleAPI.registerIsObstacleBrokenForPlayer(isObstacleBrokenForPlayer)
@@ -1023,10 +1008,4 @@ CollectionService:GetInstanceRemovedSignal(OBSTACLE_TAG):Connect(onObstacleInsta
 	- Visual Part never receives collision; client restores Visual Y via ObstacleResetAll with a
 	  delta list of reset Blocker parts only (Server is Blind). OK.
 	- Instance.new (BindableEvent, Folder, RemoteEvent) — one-time init in getOrCreate* helpers only. OK.
-	- fireObstacleHitVisual — fires ObstacleHitVisual with a single Instance reference (client
-	  notify part) after every successful applyDamageTick: once on the first-touch tick in
-	  onAttackZoneTouched, and once per iteration inside the contact damage loop — covers
-	  one-shot kills (HP hits 0 on the first touch, before the loop ever starts) as well as
-	  ticks inside the loop. No tables, no TweenService/Color3/Highlight reference on the
-	  server (Server is Blind). OK.
 ]]
